@@ -1,0 +1,71 @@
+# Motion analysis, canonical states, transition scoring and graph construction.
+
+analysis:
+  smooth_win: 5            # median/mean smoothing of per-frame features (frames)
+  settle_diff: 0.12        # mean abs thumb diff (0-255) below which end frames count as "frozen settle"
+  settle_keep: 2           # frozen frames kept at each clip end
+  blink_drop: 0.28         # eye_open drop below the clip's 80th percentile that counts as a blink
+  nod_pitch_deg: 4.0       # pitch excursion (peak-to-trough within 1 s) that counts as a nod
+  gaze_up: -0.055          # gaze_y below this (iris above lid midline) = looking up
+  gesture_wrist: 0.06      # wrist displacement from clip start (fraction of frame) = hand gesture (wrists jitter ~0.04)
+  rest_speed_pct: 35       # rest points = local speed minima below this percentile of the clip's speed
+  rest_min_gap: 25         # frames between rest points
+
+# Robust scales: a difference equal to the scale costs 1.0. Chosen from natural consecutive-frame motion
+# (see evaluation/calibrate output) and pose-cluster spreads.
+scales:
+  yaw: 1.5
+  pitch: 1.5
+  roll: 1.2
+  face_xy: 0.004           # fraction of frame
+  face_s: 0.002
+  gaze: 0.02
+  eye_open: 0.25
+  brow: 0.05
+  smile: 0.08
+  wrist: 0.02             # pose-model wrists are noisy for clasped hands
+  hand_visual: 2.0         # mean abs gray diff in the hand region of the thumbnail
+  shoulder: 0.004
+  vel_head: 0.6            # deg / frame
+  vel_face: 0.0015
+  vel_wrist: 0.003
+  visual: 1.5              # mean abs gray diff of mouth-masked thumbnails
+
+states:
+  assign_max: 2.2          # max normalised pose distance from a state centroid for a frame to be "in" that state
+  cluster_dist: 2.2        # agglomerative clustering distance for discovering states among rest frames
+  min_members: 3           # a discovered state needs this many rest frames from >= 2 clips
+  min_clips: 2
+
+segments:
+  min_len: 38              # 1.5 s
+  max_len: 125             # 5 s
+  target_len: 75           # preferred ~3 s
+
+transition:
+  window: 3                # frames compared on each side of the cut
+  weights: {pose: 1.0, motion: 0.7, expression: 0.5, visual: 1.0, hand: 0.7, gaze: 0.4, landmark: 0.8}
+  accept_cost: 0.9         # visual check 2026-10-30: joins at 1.3 showed a visible smile drop / 5px face shift
+  component_caps: {visual: 1.3, landmark: 2.5, expression: 1.0, pose: 0.8, hand: 1.2}  # each must hold to approve
+  review_cost: 1.6         # accept < cost <= review: kept but flagged for manual review; above: rejected
+  hard_reject:
+    face_jump_px: 10       # face centre jump in pixels at 1024 width
+    identity_cos: 0.55     # min ArcFace cosine between the two clip ends
+    luma_jump: 0.02
+    bg_jump: 0.02
+    hand_visual: 8.0       # mean abs gray diff in the hand region
+  seam_blend_frames: 3     # short crossfade at seams, only for transitions with visual cost <= seam_blend_max
+  seam_blend_max: 1.2
+
+quality_gate:             # segments failing any of these are excluded automatically (spec: no dramatic nods / eye rolls)
+  max_head_range_deg: 14
+  max_closed_frac: 0.25
+  max_gaze_up_frac: 0.2
+
+exits:                    # early exits from inside a segment (rest points) to calm segments, for fast interrupts
+  min_margin: 10          # frames away from the segment ends
+  to_tags: [listen, idle]
+
+graph:
+  hub_state: neutral
+  min_alternatives: 2      # warn when a state has fewer outgoing segments than this

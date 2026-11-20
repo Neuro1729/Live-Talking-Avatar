@@ -1,0 +1,35 @@
+# Fine-tuned MuseTalk 1.5 (shubh): stage-2 UNet step 10000 (musetalk_ft/, 10-31) + ORIGINAL sd-vae, with the settings
+# live_conversation_captioned (rec_20261030_181255) used: MuseTalk's own blend, no GFPGAN, sharpen 0.6, silence ramp.
+# Select with AVATAR_CFG_MUSETALK=musetalk_shubh.
+unet: models/musetalkV15_shubh/unet.pth  # copy of MuseTalk/exp_out/shubh/shubh_s2/unet-10000.pth
+# MuseTalk 1.5 backend
+gpu: 0
+batch: 8               # frames per UNet/VAE batch
+compose_threads: 6
+sharpen: 0.6           # unsharp mask on the 256 px generated face (restores stubble/skin crispness)
+silence: always        # MuseTalk on every frame (silent audio when nobody speaks): no generated->real mouth switch after speech
+                       #        crossfaded over 4 frames before/after speech (no pop);
+                       # always = lip-sync every frame (MuseTalk's silence output keeps the lips parted - measured)
+                       # raw = hard switch at speech boundaries
+feature_shift_frames: 0  # fine-tuned UNet is natively in sync (offline SyncNet offset 0 on 13/13 test clips); re-measured in this pipeline
+                         # -2 -> offset 0. (+2 made it -4.) Frame n is driven by the features of frame n-2.
+composite: v1             # as in live_conversation_captioned (v2 came later)
+v2:                      # tuned 2026-10-30 (A/B SyncNet: v1 7.33/6.96, first v2 6.92/6.44, this 7.22/6.66;
+                         # lower-face sharpness +10..14% vs v1, stubble kept). Sizes relative to the mouth width from the frame's MediaPipe landmarks
+  jaw_w: 1.05            # paste ellipse half-width
+  jaw_h: 1.45            # paste ellipse half-height (nose..chin span)
+  jaw_drop: 0.22         # ellipse centre below the nose..chin midpoint
+  feather: 0.18          # gaussian feather of the paste ellipse
+  lip_w: 0.78            # generated-mouth ellipse (lips + teeth kept from MuseTalk)
+  lip_h: 1.40
+  lip_min_h: 0.55
+  lip_drop: 0.40
+  color_match: 1.0
+  detail_sigma: 2.0      # px: frequency split; above this the original frame's texture is used on the skin
+  detail_gain: 0.8
+  lip_sharpen: 0.5
+restore:                 # GFPGAN 1.4 on the generated mouth only (lips/teeth sharper; skin outside untouched)
+                         # 2026-10-30: SyncNet 7.39/6.84 (best), lower-face sharpness = raw frame; +~14 ms/face (GPU)
+  enabled: false         # GFPGAN off (bad in production)
+  model: models/face_restore/gfpgan_1.4.onnx
+  weight: 0.8            # blend of the restored mouth over the composite

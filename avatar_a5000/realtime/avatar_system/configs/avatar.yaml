@@ -1,0 +1,24 @@
+# Paths and library definition. Relative paths are relative to avatar/realtime/ (the prototype root, "R").
+paths:
+  root: ..                      # resolved relative to avatar_system/
+  avatar_image: comfy/input/home.png
+  clips_dir: base_clips
+  musetalk_cache: avatar_cache  # prep_avatar.py output (one dir per clip)
+  data_dir: avatar_system/data  # features/, motion_graph.json, library.sqlite, reviews.json
+  # static build: the video-gen nightly (disk013 .../video-gen/bin/ffmpeg) hangs on audio muxes and ignores SIGTERM
+  ffmpeg: /opt/avatar_envs/musetalk/bin/ffmpeg
+  mediapipe_models: models/mediapipe
+
+video:
+  fps: 25
+  width: 1024
+  height: 928
+
+# Clip library. Patterns are matched against base_clips/<name>.mp4 stems.
+library:
+  include: ["sub_*", "bank_*", "ltx_*_silentA2V", "gen_*", "tb_*", "talk_*_s1"]  # tb_/talk_: speech-driven talking bank
+  exclude:
+    - bank_talkslow_s11   # rejected in review (sleepy eyes)
+    - bank_talkslow_s13   # rejected in review (big head tilt)
+    - ltx_talk_s1         # generated with free audio -> invented speech
+    - s2v_talk_s1         # Wan S2V test, 16 fps, no end-frame control

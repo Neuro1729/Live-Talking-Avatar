@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Avatar</title>
+<style>
+  :root { --bg:#0f1115; --panel:#181b22; --text:#e8eaf0; --muted:#9aa1b2; --accent:#4f8cff; --user:#2a3346; --bot:#1f2a22; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui, sans-serif; }
+  .wrap { max-width:1200px; margin:0 auto; padding:16px; display:grid; grid-template-columns:minmax(0,3fr) minmax(0,2fr); gap:16px; }
+  @media (max-width:900px){ .wrap{ grid-template-columns:1fr; } }
+  .stage { position:relative; background:#000; border-radius:12px; overflow:hidden; aspect-ratio:1024/928; }
+  canvas { width:100%; height:100%; display:block; }
+  .overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.55); }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:10px 16px; font-size:15px; cursor:pointer; }
+  button.secondary { background:#2b3140; }
+  button:disabled { opacity:.5; cursor:default; }
+  .panel { background:var(--panel); border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:10px; min-height:0; }
+  .log { flex:1; overflow-y:auto; min-height:240px; max-height:60vh; display:flex; flex-direction:column; gap:8px; }
+  .msg { padding:8px 10px; border-radius:8px; white-space:pre-wrap; }
+  .msg.user { background:var(--user); align-self:flex-end; }
+  .msg.bot { background:var(--bot); }
+  .msg.sys { color:var(--muted); font-size:13px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  input[type=text] { flex:1; min-width:0; background:#0f1218; color:var(--text); border:1px solid #2b3140; border-radius:8px; padding:10px; font-size:15px; }
+  select { background:#0f1218; color:var(--text); border:1px solid #2b3140; border-radius:8px; padding:8px; }
+  .mic.rec { background:#d33; }
+  .stat { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div>
+    <div class="stage">
+      <canvas id="cv" width="768" height="696"></canvas>
+      <div class="overlay" id="ov"><button id="startBtn">Start avatar</button></div>
+    </div>
+    <div class="stat" id="stat">not connected</div>
+  </div>
+  <div class="panel">
+    <div class="row">
+      <label>Language <select id="lang"><option value="hi-IN">Hindi</option><option value="en-IN">English</option></select></label>
+      <label>Voice <select id="spk">
+        <option>shubh</option><option>aayan</option><option>aditya</option><option>rahul</option><option>rohan</option><option>kabir</option>
+        <option>anand</option><option>varun</option><option>amit</option></select></label>
+    </div>
+    <div class="log" id="log"></div>
+    <div class="row">
+      <input type="text" id="q" placeholder="Type a question and press Enter…" disabled>
+      <button id="send" disabled>Send</button>
+    </div>
+    <div class="row">
+      <button class="mic secondary" id="mic" disabled>🎤 Hold to talk</button>
+      <button class="secondary" id="stop" disabled>Stop speaking</button>
+    </div>
+  </div>
+</div>
+<script>
+const FPS = 25, FRAME_S = 1 / FPS, SR = 16000, JITTER = 0.25;
+const cv = document.getElementById('cv'), g = cv.getContext('2d');
+const logEl = document.getElementById('log'), stat = document.getElementById('stat');
+let ws, ctx, t0 = null, frames = [], nFrames = 0, lastStat = performance.now(), recvSinceStat = 0;
+
+function addMsg(cls, text) {
+  const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
+  logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight; return d;
+}
+let botBubble = null;
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => { stat.textContent = 'connected'; ['q','send','mic','stop'].forEach(id => document.getElementById(id).disabled = false); };
+  ws.onclose = () => { stat.textContent = 'disconnected – retrying…'; t0 = null; setTimeout(connect, 1500); };
+  ws.onmessage = ev => {
+    if (typeof ev.data === 'string') return onEvent(JSON.parse(ev.data));
+    const dv = new DataView(ev.data), k = dv.getUint32(0, true), plen = dv.getUint32(4, true);
+    const pcm = new Int16Array(ev.data.slice(8, 8 + plen));
+    const jpg = new Blob([new Uint8Array(ev.data, 8 + plen)], {type: 'image/jpeg'});
+    onFrame(k, pcm, jpg);
+  };
+}
+
+function onEvent(m) {
+  if (m.type === 'user') { addMsg('user', m.text); botBubble = null; }
+  else if (m.type === 'assistant') { if (!botBubble) botBubble = addMsg('bot', m.text); else botBubble.textContent += ' ' + m.text; logEl.scrollTop = logEl.scrollHeight; }
+  else if (m.type === 'latency') addMsg('sys', `first audio after ${m.first_audio_s}s`);
+  else if (m.type === 'error') addMsg('sys', '⚠ ' + m.text);
+}
+
+function onFrame(k, pcm, jpg) {
+  recvSinceStat++;
+  const now = ctx.currentTime;
+  if (t0 === null || t0 + k * FRAME_S < now) t0 = now + JITTER - k * FRAME_S;   // (re)sync playout clock
+  const when = t0 + k * FRAME_S;
+  // audio: schedule this frame's 40 ms exactly at its slot (contiguous with neighbours)
+  const buf = ctx.createBuffer(1, pcm.length, SR), ch = buf.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+  const src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination); src.start(when);
+  createImageBitmap(jpg).then(bmp => { frames.push({when, bmp}); });
+}
+
+function draw() {
+  if (ctx) {
+    const now = ctx.currentTime;
+    let show = null;
+    while (frames.length && frames[0].when <= now) { if (show) show.bmp.close(); show = frames.shift(); }
+    if (show) {
+      if (cv.width !== show.bmp.width) { cv.width = show.bmp.width; cv.height = show.bmp.height; }
+      g.drawImage(show.bmp, 0, 0); show.bmp.close(); nFrames++;
+    }
+    const t = performance.now();
+    if (t - lastStat > 1000) {
+      stat.textContent = `display ${(nFrames * 1000 / (t - lastStat)).toFixed(1)} fps · recv ${(recvSinceStat * 1000 / (t - lastStat)).toFixed(1)} fps · buffer ${frames.length}`;
+      nFrames = 0; recvSinceStat = 0; lastStat = t;
+    }
+  }
+  requestAnimationFrame(draw);
+}
+
+document.getElementById('startBtn').onclick = () => {
+  ctx = new AudioContext({sampleRate: 48000});
+  document.getElementById('ov').style.display = 'none';
+  connect(); requestAnimationFrame(draw);
+};
+
+function ask(text) {
+  if (!text.trim() || !ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify({type: 'ask', text, lang: document.getElementById('lang').value, speaker: document.getElementById('spk').value}));
+}
+const q = document.getElementById('q');
+q.onkeydown = e => { if (e.key === 'Enter') { ask(q.value); q.value = ''; } };
+document.getElementById('send').onclick = () => { ask(q.value); q.value = ''; };
+document.getElementById('stop').onclick = () => ws && ws.send(JSON.stringify({type: 'stop'}));
+
+// push-to-talk -> /stt -> ask
+const mic = document.getElementById('mic');
+let rec, chunks = [];
+async function startRec() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    rec = new MediaRecorder(stream); chunks = [];
+    rec.ondataavailable = e => chunks.push(e.data);
+    rec.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      const fd = new FormData(); fd.append('file', new Blob(chunks, {type: rec.mimeType}), 'speech.webm');
+      const lang = document.getElementById('lang').value;
+      const r = await fetch(`/stt?lang=${lang}`, {method: 'POST', body: fd}).then(r => r.json());
+      if (r.text) ask(r.text); else addMsg('sys', r.error ? '⚠ ' + r.error : '(didn’t catch that)');
+    };
+    rec.start(); mic.classList.add('rec'); mic.textContent = '● Recording… release to send';
+    ws && ws.send(JSON.stringify({type: 'listening'}));
+  } catch (e) { addMsg('sys', '⚠ mic: ' + e.message); }
+}
+function stopRec() { if (rec && rec.state === 'recording') { rec.stop(); mic.classList.remove('rec'); mic.textContent = '🎤 Hold to talk'; } }
+mic.onmousedown = startRec; mic.onmouseup = stopRec; mic.onmouseleave = stopRec;
+mic.ontouchstart = e => { e.preventDefault(); startRec(); }; mic.ontouchend = stopRec;
+</script>
+</body>
+</html>

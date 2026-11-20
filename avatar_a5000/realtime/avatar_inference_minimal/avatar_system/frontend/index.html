@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Avatar Dev Console</title>
+<style>
+:root{--bg:#101214;--panel:#181b1f;--line:#2a2f36;--text:#e3e6ea;--muted:#8b95a1;--accent:#5aa9ff;--ok:#5fc27e;--warn:#e7b24a;--bad:#e06464}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,sans-serif}
+main{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:16px;padding:16px;max-width:1500px;margin:auto}
+@media (max-width:900px){main{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+#stage{position:relative}canvas{width:100%;border-radius:8px;background:#000;display:block}
+#dbg{position:absolute;left:10px;top:10px;font:12px ui-monospace,monospace;background:#000a;padding:6px 8px;border-radius:6px;display:none;white-space:pre}
+#ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#000b;border-radius:8px}
+button{background:#232830;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:7px 12px;cursor:pointer}
+button.primary{background:var(--accent);color:#08111c;border:0}button:disabled{opacity:.4}
+.row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}input,select{background:#0c0e10;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:7px}
+#q{flex:1;min-width:200px}#log{height:220px;overflow:auto;margin-top:10px;font-size:13px}
+.msg{margin:4px 0}.user{color:var(--accent)}.bot{color:var(--text)}.sys{color:var(--muted);font-size:12px}
+.state{font-size:20px;font-weight:600}.LISTENING{color:var(--ok)}.THINKING{color:var(--warn)}.SPEAKING{color:var(--accent)}.INTERRUPTED,.RECOVERY{color:var(--bad)}
+table{width:100%;border-collapse:collapse;font-size:12.5px}td{padding:3px 4px;border-bottom:1px solid var(--line);vertical-align:top}
+td:first-child{color:var(--muted);width:46%}code{font:12px ui-monospace,monospace;color:#cfe3ff;word-break:break-all}
+h3{margin:12px 0 6px;font-size:13px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+</style></head><body>
+<main>
+<section>
+  <div class="panel" id="stage"><canvas id="cv" width="768" height="696"></canvas><div id="dbg"></div>
+    <div id="ov"><button class="primary" id="startBtn">Start avatar session</button></div></div>
+  <div class="panel" style="margin-top:12px">
+    <div class="row" style="margin-top:0"><input id="q" placeholder="Type a message (Hindi / Hinglish / English)…" disabled>
+      <select id="lang"><option value="hi-IN">Hindi</option><option value="en-IN">English</option></select>
+      <button class="primary" id="send" disabled>Send</button></div>
+    <div class="row"><button id="spk" disabled>User is speaking</button><button id="intr" disabled>Interrupt</button>
+      <button id="rec" disabled>● Record</button><label><input type="checkbox" id="dbgT"> debug overlay</label></div>
+    <div id="log"></div>
+  </div>
+</section>
+<aside class="panel">
+  <div class="state" id="st">–</div><div id="stfor" class="sys"></div>
+  <h3>Motion</h3><table id="tm"></table>
+  <h3>Buffers &amp; performance</h3><table id="tp"></table>
+  <h3>Latency (last turn)</h3><table id="tl"></table>
+</aside>
+</main>
+<script>
+const FPS=25,FRAME_S=1/FPS,SR=16000,JITTER=0.25;
+const cv=document.getElementById('cv'),g=cv.getContext('2d'),logEl=document.getElementById('log');
+let ws,ctx,t0=null,frames=[],shown=0,recv=0,lastT=performance.now(),dispFps=0,recvFps=0,avSkew=0,lastMeta={},recording=false;
+const $=id=>document.getElementById(id);
+function addMsg(c,t){const d=document.createElement('div');d.className='msg '+c;d.textContent=t;logEl.appendChild(d);logEl.scrollTop=logEl.scrollHeight;return d}
+let bot=null;
+function connect(){
+  ws=new WebSocket(`ws://${location.host}/ws`);ws.binaryType='arraybuffer';
+  ws.onopen=()=>['q','send','spk','intr','rec'].forEach(i=>$(i).disabled=false);
+  ws.onclose=()=>{t0=null;setTimeout(connect,1500)};
+  ws.onmessage=ev=>{
+    if(typeof ev.data==='string')return onEvent(JSON.parse(ev.data));
+    const dv=new DataView(ev.data),n=dv.getUint32(0,true),pl=dv.getUint32(4,true),ml=dv.getUint32(8,true);
+    const pcm=new Int16Array(ev.data.slice(16,16+pl));
+    const meta=JSON.parse(new TextDecoder().decode(new Uint8Array(ev.data,16+pl,ml)));
+    const jpg=new Blob([new Uint8Array(ev.data,16+pl+ml)],{type:'image/jpeg'});
+    onFrame(n,pcm,meta,jpg)};
+}
+function onEvent(m){
+  if(m.type==='user'){addMsg('user',m.text);bot=null}
+  else if(m.type==='assistant'){if(!bot)bot=addMsg('bot',m.text);else bot.textContent+=' '+m.text}
+  else if(m.type==='behavior')addMsg('sys',`behaviour hints: ${(m.hints||[]).join(', ')} (${m.source})`);
+  else if(m.type==='latency'){lastLat=m;addMsg('sys',`first audible after ${m.first_audible_s}s`)}
+  else if(m.type==='error')addMsg('sys','⚠ '+m.text);
+}
+let lastLat={};
+function onFrame(n,pcm,meta,jpg){
+  recv++;const now=ctx.currentTime;
+  if(t0===null||t0+n*FRAME_S<now)t0=now+JITTER-n*FRAME_S;
+  const when=t0+n*FRAME_S;
+  const buf=ctx.createBuffer(1,pcm.length,SR),ch=buf.getChannelData(0);
+  for(let i=0;i<pcm.length;i++)ch[i]=pcm[i]/32768;
+  const s=ctx.createBufferSource();s.buffer=buf;s.connect(ctx.destination);s.start(when);
+  createImageBitmap(jpg).then(b=>frames.push({when,b,meta}));
+}
+function draw(){
+  if(ctx){const now=ctx.currentTime;let show=null;
+    while(frames.length&&frames[0].when<=now){if(show)show.b.close();show=frames.shift()}
+    if(show){if(cv.width!==show.b.width){cv.width=show.b.width;cv.height=show.b.height}
+      g.drawImage(show.b,0,0);show.b.close();shown++;avSkew=(now-show.when)*1000;lastMeta=show.meta;
+      if($('dbgT').checked){$('dbg').style.display='block';const m=show.meta;
+        $('dbg').textContent=`n=${m.n} t=${m.t}s ${m.state}\n${m.seg} f${m.idx}${m.seam?'  [SEAM]':''}${m.blend?' [blend]':''}\nutt=${m.utt||'-'}`}
+      else $('dbg').style.display='none'}
+    const t=performance.now();if(t-lastT>1000){dispFps=shown*1000/(t-lastT);recvFps=recv*1000/(t-lastT);shown=recv=0;lastT=t}}
+  requestAnimationFrame(draw)}
+function rows(el,o){el.innerHTML=Object.entries(o).map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join('')}
+const f=(x,k='mean')=>x?`${x[k]} ms`:'–';
+async function poll(){
+  try{const m=await fetch('/api/metrics').then(r=>r.json());
+    $('st').textContent=m.state.state;$('st').className='state '+m.state.state;$('stfor').textContent=`for ${m.state.for_s}s · backend ${m.backend}`;
+    rows($('tm'),{'current clip':`<code>${lastMeta.clip||'–'}</code> f${lastMeta.idx??''}`,'segment':`<code>${lastMeta.seg||'–'}</code>`,
+      'graph pose (segment end)':lastMeta.pose||'–','upcoming plan':`<code>${(m.plan.plan||[]).join(' → ')}</code>`,
+      'frames left in segment':m.plan.frames_left,'transitions':m.transitions});
+    rows($('tp'),{'display / receive fps':`${dispFps.toFixed(1)} / ${recvFps.toFixed(1)}`,'render capacity':`${m.render_fps_capacity??'–'} fps`,
+      'lip-sync batch':`${f(m.render_ms)} (p95 ${f(m.render_ms,'p95')})`,'encode / frame':f(m.encode_ms),
+      'queues plan/render/out':`${m.queues.plan} / ${m.queues.render} / ${m.queues.out}`,'browser video buffer':`${frames.length} frames`,
+      'audio buffered':`${(m.audio_buffer_frames/25).toFixed(2)} s`,'A/V (server)':`${m.av_offset_samples} samples`,
+      'A/V (display lateness)':`${avSkew.toFixed(0)} ms`,'underruns out/audio':`${m.counters.output_underruns} / ${m.audio.underruns}`,
+      'GPU peak / RSS peak':`${m.gpu_peak_mem_gb??'–'} GB / ${m.rss_peak_gb} GB`});
+    const L=m.latency_turns.length?m.latency_turns[m.latency_turns.length-1]:{};
+    rows($('tl'),{'LLM first sentence':L.llm_first_sentence_s??'–','TTS first chunk':L.tts_first_chunk_s??'–',
+      'first TTS done':L.first_tts_done_s??'–','first audible':L.first_audible_s??'–','behaviour':(L.behavior?.hints||[]).join(', ')||'–'});
+  }catch(e){}
+  setTimeout(poll,500)}
+$('startBtn').onclick=()=>{ctx=new AudioContext({sampleRate:48000});$('ov').style.display='none';connect();requestAnimationFrame(draw);poll()};
+function ask(t){if(!t.trim()||!ws||ws.readyState!==1)return;ws.send(JSON.stringify({type:'ask',text:t,lang:$('lang').value}))}
+$('q').onkeydown=e=>{if(e.key==='Enter'){ask($('q').value);$('q').value=''}};
+$('send').onclick=()=>{ask($('q').value);$('q').value=''};
+$('intr').onclick=()=>ws.send(JSON.stringify({type:'interrupt'}));
+$('spk').onclick=()=>ws.send(JSON.stringify({type:'user_speaking'}));
+$('rec').onclick=async()=>{recording=!recording;const r=await fetch('/api/record/'+(recording?'start':'stop'),{method:'POST'}).then(r=>r.json());
+  $('rec').textContent=recording?'■ Stop recording':'● Record';addMsg('sys',JSON.stringify(r))};
+</script></body></html>

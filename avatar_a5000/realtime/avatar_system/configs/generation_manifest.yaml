@@ -1,0 +1,13 @@
+# Clips to generate for graph gaps (validator 2026-10-30: state "tilt" (thoughtful head tilt) had no runtime segment).
+# start/end = anchor names from data/anchors.json ("home" = avatar image). Prompts live in R/prompts/.
+clips:
+  - {name: gen_home2tilt_s51, prompt_file: subtle_to_tilt.txt,   seed: 51, start: home, end: tilt}
+  - {name: gen_home2tilt_s52, prompt_file: subtle_to_tilt.txt,   seed: 52, start: home, end: tilt}
+  - {name: gen_tilt2home_s51, prompt_file: subtle_from_tilt.txt, seed: 51, start: tilt, end: home}
+  - {name: gen_tilt2home_s52, prompt_file: subtle_from_tilt.txt, seed: 52, start: tilt, end: home}
+  # v1 result (measured): anchors reached (pose dist <= 0.64) but mid-clip head roll swung 44 deg -> quality gate
+  # excluded them. v2: 3.9 s clips leave the model less room to wander.
+  - {name: gen_home2tilt_v2_s61, prompt_file: subtle_to_tilt.txt,   seed: 61, start: home, end: tilt, frames: 97}
+  - {name: gen_home2tilt_v2_s62, prompt_file: subtle_to_tilt.txt,   seed: 62, start: home, end: tilt, frames: 97}
+  - {name: gen_tilt2home_v2_s61, prompt_file: subtle_from_tilt.txt, seed: 61, start: tilt, end: home, frames: 97}
+  - {name: gen_tilt2home_v2_s62, prompt_file: subtle_from_tilt.txt, seed: 62, start: tilt, end: home, frames: 97}

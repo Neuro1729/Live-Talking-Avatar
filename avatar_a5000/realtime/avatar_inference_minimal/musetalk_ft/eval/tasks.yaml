@@ -1,0 +1,39 @@
+task_0:
+ video_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_000.mp4"
+ audio_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_000.wav"
+task_1:
+ video_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_001.mp4"
+ audio_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_001.wav"
+task_2:
+ video_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_002.mp4"
+ audio_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_002.wav"
+task_3:
+ video_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_003.mp4"
+ audio_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_003.wav"
+task_4:
+ video_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_004.mp4"
+ audio_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_004.wav"
+task_5:
+ video_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_005.mp4"
+ audio_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_005.wav"
+task_6:
+ video_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_006.mp4"
+ audio_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_006.wav"
+task_7:
+ video_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_007.mp4"
+ audio_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_007.wav"
+task_8:
+ video_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_008.mp4"
+ audio_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_008.wav"
+task_9:
+ video_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_009.mp4"
+ audio_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_009.wav"
+task_10:
+ video_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_010.mp4"
+ audio_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_010.wav"
+task_11:
+ video_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_011.mp4"
+ audio_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_011.wav"
+task_12:
+ video_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_012.mp4"
+ audio_path: "/var/autofs/nfs10g/nest10/usrs/vishal/Aaryan/avatar/realtime/MuseTalk/dataset/shubh/clips/mtft_test_012.wav"

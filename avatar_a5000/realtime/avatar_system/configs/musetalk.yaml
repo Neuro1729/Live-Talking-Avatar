@@ -1,0 +1,31 @@
+# MuseTalk 1.5 backend
+gpu: 3                 # CUDA device index (PCI bus order). GPUs 0 and 2 fail CUDA alloc on gpu28.
+batch: 8               # frames per UNet/VAE batch
+compose_threads: 6
+sharpen: 0.6           # unsharp mask on the 256 px generated face (restores stubble/skin crispness)
+silence: ramp          # ramp = raw source frames when nobody speaks (natural closed mouth), MuseTalk during speech,
+                       #        crossfaded over 4 frames before/after speech (no pop);
+                       # always = lip-sync every frame (MuseTalk's silence output keeps the lips parted - measured)
+                       # raw = hard switch at speech boundaries
+feature_shift_frames: -2 # SyncNet (LatentSync syncnet_v2): unshifted MuseTalk output had AV offset -2 (mouth 80 ms early);
+                         # -2 -> offset 0. (+2 made it -4.) Frame n is driven by the features of frame n-2.
+composite: v2            # v1 = MuseTalk's own blend (whole jaw/cheek patch, stubble lost); v2 = detail-preserving
+v2:                      # tuned 2026-10-30 (A/B SyncNet: v1 7.33/6.96, first v2 6.92/6.44, this 7.22/6.66;
+                         # lower-face sharpness +10..14% vs v1, stubble kept). Sizes relative to the mouth width from the frame's MediaPipe landmarks
+  jaw_w: 1.05            # paste ellipse half-width
+  jaw_h: 1.45            # paste ellipse half-height (nose..chin span)
+  jaw_drop: 0.22         # ellipse centre below the nose..chin midpoint
+  feather: 0.18          # gaussian feather of the paste ellipse
+  lip_w: 0.78            # generated-mouth ellipse (lips + teeth kept from MuseTalk)
+  lip_h: 1.40
+  lip_min_h: 0.55
+  lip_drop: 0.40
+  color_match: 1.0
+  detail_sigma: 2.0      # px: frequency split; above this the original frame's texture is used on the skin
+  detail_gain: 0.8
+  lip_sharpen: 0.5
+restore:                 # GFPGAN 1.4 on the generated mouth only (lips/teeth sharper; skin outside untouched)
+                         # 2026-10-30: SyncNet 7.39/6.84 (best), lower-face sharpness = raw frame; +~14 ms/face (GPU)
+  enabled: true
+  model: models/face_restore/gfpgan_1.4.onnx
+  weight: 0.8            # blend of the restored mouth over the composite

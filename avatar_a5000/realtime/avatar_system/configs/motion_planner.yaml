@@ -1,0 +1,30 @@
+playback_speed: 1.3      # source-frame rate multiplier (LTX subtle clips are slower than real people)
+# Runtime motion planner (beam search over the validated graph).
+lookahead: 3            # segments deep
+beam_width: 12
+max_branch: 25          # successors expanded per node beyond the first step
+discount: 0.6           # weight of later steps in a path
+temperature: 0.35       # controlled variation among the best first steps (0 = always the best)
+sample_top_k: 5
+cost_floor: 0.45        # joins up to here are as invisible as natural continuations (seam metrics)
+max_cost_over_best: 0.35  # never sample a first step whose join is this much worse than the best join available
+weights:
+  continuity: 2.0       # transition cost (continuity first)
+  semantic: 1.0
+  prosody: 0.6
+  intensity: 0.8
+  quality: 1.0
+  repetition: 0.8
+  return: 1.0
+recovery_seconds:       # paths should end within this many seconds of the neutral hub
+  LISTENING: 6
+  THINKING: 6
+  SPEAKING: 9
+  INTERRUPTED: 3
+  RECOVERY: 3
+mode_intensity:         # default target intensity per behaviour state (0..1)
+  LISTENING: 0.1
+  THINKING: 0.2
+  SPEAKING: 0.4
+  INTERRUPTED: 0.0
+  RECOVERY: 0.0

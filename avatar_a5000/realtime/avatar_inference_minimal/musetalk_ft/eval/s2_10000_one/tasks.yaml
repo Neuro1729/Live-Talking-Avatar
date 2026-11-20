@@ -1,0 +1,6 @@
+task_0:
+ video_path: "dataset/shubh/clips/mtft_test_000.mp4"
+ audio_path: "dataset/shubh/clips/mtft_test_000.wav"
+task_1:
+ video_path: "dataset/shubh/clips/mtft_test_003.mp4"
+ audio_path: "dataset/shubh/clips/mtft_test_003.wav"

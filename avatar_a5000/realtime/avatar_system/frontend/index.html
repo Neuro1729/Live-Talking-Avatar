@@ -1,0 +1,853 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Avatar Dev Console</title>
+<style>
+:root{--bg:#101214;--panel:#181b1f;--line:#2a2f36;--text:#e3e6ea;--muted:#8b95a1;--accent:#5aa9ff;--ok:#5fc27e;--warn:#e7b24a;--bad:#e06464}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,sans-serif}
+main{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:16px;padding:16px;max-width:1500px;margin:auto}
+@media (max-width:900px){main{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+#stage{position:relative}canvas{width:100%;border-radius:8px;background:#000;display:block}
+#dbg{position:absolute;left:10px;top:10px;font:12px ui-monospace,monospace;background:#000a;padding:6px 8px;border-radius:6px;display:none;white-space:pre}
+#ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#000b;border-radius:8px}
+button{background:#232830;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:7px 12px;cursor:pointer}
+button.primary{background:var(--accent);color:#08111c;border:0}button:disabled{opacity:.4}
+.row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}input,select{background:#0c0e10;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:7px}
+#q{flex:1;min-width:200px}#log{height:220px;overflow:auto;margin-top:10px;font-size:13px}
+.msg{margin:4px 0}.user{color:var(--accent)}.bot{color:var(--text)}.sys{color:var(--muted);font-size:12px}
+.state{font-size:20px;font-weight:600}.LISTENING{color:var(--ok)}.THINKING{color:var(--warn)}.SPEAKING{color:var(--accent)}.INTERRUPTED,.RECOVERY{color:var(--bad)}
+table{width:100%;border-collapse:collapse;font-size:12.5px}td{padding:3px 4px;border-bottom:1px solid var(--line);vertical-align:top}
+td:first-child{color:var(--muted);width:46%}code{font:12px ui-monospace,monospace;color:#cfe3ff;word-break:break-all}
+h3{margin:12px 0 6px;font-size:13px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+</style></head><body>
+<main>
+<section>
+  <div class="panel" id="stage"><canvas id="cv" width="768" height="696"></canvas><div id="dbg"></div>
+    <div id="ov"><button class="primary" id="startBtn">Start avatar session</button></div></div>
+  <div class="panel" style="margin-top:12px">
+    <div class="row" style="margin-top:0"><input id="q" placeholder="Type a message (Hindi / Hinglish / English)…" disabled>
+      <select id="lang"><option value="hi-IN">Hindi</option><option value="en-IN">English</option></select>
+      <button class="primary" id="send" disabled>Send</button></div>
+    <div class="row"><button id="spk" disabled>User is speaking</button><button id="intr" disabled>Interrupt</button>
+      <button id="rec" disabled>● Record</button><label><input type="checkbox" id="dbgT"> debug overlay</label></div>
+    <div id="log"></div>
+  </div>
+</section>
+<aside class="panel">
+  <div class="state" id="st">–</div><div id="stfor" class="sys"></div>
+  <h3>Motion</h3><table id="tm"></table>
+  <h3>Buffers &amp; performance</h3><table id="tp"></table>
+  <h3>Latency (last turn)</h3><table id="tl"></table>
+</aside>
+</main>
+<script>
+const FPS=25,FRAME_S=1/FPS,SR=16000,JITTER=1.5;
+const cv=document.getElementById('cv'),g=cv.getContext('2d'),logEl=document.getElementById('log');
+let ws,ctx,t0=null,frames=[],shown=0,recv=0,lastT=performance.now(),dispFps=0,recvFps=0,avSkew=0,lastMeta={},recording=false;
+const $=id=>document.getElementById(id);
+function addMsg(c,t){const d=document.createElement('div');d.className='msg '+c;d.textContent=t;logEl.appendChild(d);logEl.scrollTop=logEl.scrollHeight;return d}
+let bot=null;
+function connect(){
+  ws=new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);ws.binaryType='arraybuffer';
+  ws.onopen=()=>['q','send','spk','intr','rec'].forEach(i=>$(i).disabled=false);
+  ws.onclose=()=>{t0=null;setTimeout(connect,1500)};
+  ws.onmessage=ev=>{
+    if(typeof ev.data==='string')return onEvent(JSON.parse(ev.data));
+    const dv=new DataView(ev.data),n=dv.getUint32(0,true),pl=dv.getUint32(4,true),ml=dv.getUint32(8,true);
+    const pcm=new Int16Array(ev.data.slice(16,16+pl));
+    const meta=JSON.parse(new TextDecoder().decode(new Uint8Array(ev.data,16+pl,ml)));
+    const jpg=new Blob([new Uint8Array(ev.data,16+pl+ml)],{type:'image/jpeg'});
+    onFrame(n,pcm,meta,jpg)};
+}
+function onEvent(m){
+  if(m.type==='user'){addMsg('user',m.text);bot=null}
+  else if(m.type==='assistant'){if(!bot)bot=addMsg('bot',m.text);else bot.textContent+=' '+m.text}
+  else if(m.type==='behavior')addMsg('sys',`behaviour hints: ${(m.hints||[]).join(', ')} (${m.source})`);
+  else if(m.type==='latency'){lastLat=m;addMsg('sys',`first audible after ${m.first_audible_s}s`)}
+  else if(m.type==='error')addMsg('sys','⚠ '+m.text);
+}
+let lastLat={};
+function onFrame(n,pcm,meta,jpg){
+  recv++;const now=ctx.currentTime;
+  if(t0===null||t0+n*FRAME_S<now)t0=now+JITTER-n*FRAME_S;
+  const when=t0+n*FRAME_S;
+  const buf=ctx.createBuffer(1,pcm.length,SR),ch=buf.getChannelData(0);
+  for(let i=0;i<pcm.length;i++)ch[i]=pcm[i]/32768;
+  const s=ctx.createBufferSource();s.buffer=buf;s.connect(ctx.destination);s.start(when);
+  createImageBitmap(jpg).then(b=>{if(window.avatarFullReplyBusy){b.close();return;}frames.push({when,b,meta})});
+}
+function draw(){
+  if(ctx){const now=ctx.currentTime;let show=null;
+    while(frames.length&&frames[0].when<=now){if(show)show.b.close();show=frames.shift()}
+    if(show){if(cv.width!==show.b.width){cv.width=show.b.width;cv.height=show.b.height}
+      g.drawImage(show.b,0,0);show.b.close();shown++;avSkew=(now-show.when)*1000;lastMeta=show.meta;
+      if($('dbgT').checked){$('dbg').style.display='block';const m=show.meta;
+        $('dbg').textContent=`n=${m.n} t=${m.t}s ${m.state}\n${m.seg} f${m.idx}${m.seam?'  [SEAM]':''}${m.blend?' [blend]':''}\nutt=${m.utt||'-'}`}
+      else $('dbg').style.display='none'}
+    const t=performance.now();if(t-lastT>1000){dispFps=shown*1000/(t-lastT);recvFps=recv*1000/(t-lastT);shown=recv=0;lastT=t}}
+  requestAnimationFrame(draw)}
+function rows(el,o){el.innerHTML=Object.entries(o).map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join('')}
+const f=(x,k='mean')=>x?`${x[k]} ms`:'–';
+async function poll(){
+  try{const m=await fetch('/api/metrics').then(r=>r.json());
+    $('st').textContent=m.state.state;$('st').className='state '+m.state.state;$('stfor').textContent=`for ${m.state.for_s}s · backend ${m.backend}`;
+    rows($('tm'),{'current clip':`<code>${lastMeta.clip||'–'}</code> f${lastMeta.idx??''}`,'segment':`<code>${lastMeta.seg||'–'}</code>`,
+      'graph pose (segment end)':lastMeta.pose||'–','upcoming plan':`<code>${(m.plan.plan||[]).join(' → ')}</code>`,
+      'frames left in segment':m.plan.frames_left,'transitions':m.transitions});
+    rows($('tp'),{'display / receive fps':`${dispFps.toFixed(1)} / ${recvFps.toFixed(1)}`,'render capacity':`${m.render_fps_capacity??'–'} fps`,
+      'lip-sync batch':`${f(m.render_ms)} (p95 ${f(m.render_ms,'p95')})`,'encode / frame':f(m.encode_ms),
+      'queues plan/render/out':`${m.queues.plan} / ${m.queues.render} / ${m.queues.out}`,'browser video buffer':`${frames.length} frames`,
+      'audio buffered':`${(m.audio_buffer_frames/25).toFixed(2)} s`,'A/V (server)':`${m.av_offset_samples} samples`,
+      'A/V (display lateness)':`${avSkew.toFixed(0)} ms`,'underruns out/audio':`${m.counters.output_underruns} / ${m.audio.underruns}`,
+      'GPU peak / RSS peak':`${m.gpu_peak_mem_gb??'–'} GB / ${m.rss_peak_gb} GB`});
+    const L=m.latency_turns.length?m.latency_turns[m.latency_turns.length-1]:{};
+    rows($('tl'),{'LLM first sentence':L.llm_first_sentence_s??'–','TTS first chunk':L.tts_first_chunk_s??'–',
+      'first TTS done':L.first_tts_done_s??'–','first audible':L.first_audible_s??'–','behaviour':(L.behavior?.hints||[]).join(', ')||'–'});
+  }catch(e){}
+  setTimeout(poll,500)}
+$('startBtn').onclick=()=>{ctx=new AudioContext({sampleRate:48000});$('ov').style.display='none';connect();requestAnimationFrame(draw);poll()};
+function ask(t){if(!t.trim()||!ws||ws.readyState!==1)return;ws.send(JSON.stringify({type:'ask',text:t,lang:$('lang').value}))}
+$('q').onkeydown=e=>{if(e.key==='Enter'){ask($('q').value);$('q').value=''}};
+$('send').onclick=()=>{ask($('q').value);$('q').value=''};
+$('intr').onclick=()=>ws.send(JSON.stringify({type:'interrupt'}));
+$('spk').onclick=()=>ws.send(JSON.stringify({type:'user_speaking'}));
+$('rec').onclick=async()=>{recording=!recording;const r=await fetch('/api/record/'+(recording?'start':'stop'),{method:'POST'}).then(r=>r.json());
+  $('rec').textContent=recording?'■ Stop recording':'● Record';addMsg('sys',JSON.stringify(r))};
+</script>
+
+
+
+<!-- AUTO_CONVERSATION_V3 -->
+<div id="autoTalkPanel" style="
+ position:fixed;right:12px;bottom:12px;z-index:9999;
+ background:#182237;color:white;padding:12px;
+ border-radius:10px;font:14px Arial;
+ box-shadow:0 3px 18px #0008;max-width:90vw">
+
+  <select id="autoTalkLang"
+    style="padding:8px;border-radius:6px">
+    <option value="hi-IN">Hindi / Hinglish</option>
+    <option value="en-IN">English</option>
+  </select>
+
+  <button id="autoTalkBtn" style="
+    background:#2677e5;color:#fff;border:0;
+    border-radius:6px;padding:10px;cursor:pointer">
+    Start conversation
+  </button>
+
+  <div id="autoTalkStatus"
+    style="font-size:12px;margin-top:8px">
+    Microphone off
+  </div>
+</div>
+
+<script>
+(()=>{
+  'use strict';
+
+  const btn = document.getElementById('autoTalkBtn');
+  const msg = document.getElementById('autoTalkStatus');
+  const lang = document.getElementById('autoTalkLang');
+
+  const note = s => {
+    msg.textContent = s;
+    console.log('[auto-voice]', s);
+  };
+
+  let on = false;
+  let phase = 'off';
+  let stream, micCtx, src, analyser, zero;
+  let t1, t2, recorder, chunks = [];
+
+  let speechAt = 0;
+  let lastLoud = 0;
+  let hits = 0;
+  let noise = 0.003;
+  let coolUntil = 0;
+  let sentAt = 0;
+  let sawSpeaking = false;
+  let sawThinking = false;
+  let checking = false;
+
+  const samples = new Float32Array(2048);
+
+  function beginRecording() {
+    const mime = MediaRecorder.isTypeSupported(
+      'audio/webm;codecs=opus'
+    ) ? 'audio/webm;codecs=opus' : undefined;
+
+    recorder = new MediaRecorder(
+      stream,
+      mime ? {mimeType: mime} : {}
+    );
+
+    chunks = [];
+
+    recorder.ondataavailable = e => {
+      if (e.data.size) chunks.push(e.data);
+    };
+
+    recorder.onstop = () => {
+      if (on) {
+        sendVoice().catch(e => {
+          phase = 'listening';
+          note('Voice error: ' + e.message);
+        });
+      }
+    };
+
+    recorder.onerror = e => {
+      console.error('[auto-voice] recorder', e);
+      phase = 'listening';
+      note('Recorder error');
+    };
+
+    recorder.start(250);
+    phase = 'recording';
+    speechAt = lastLoud = performance.now();
+
+    note('Listening to your question...');
+  }
+
+  function meterTick(){
+    if (window.avatarFullReplyBusy) return;
+    if (
+      !on ||
+      (phase !== 'listening' && phase !== 'recording') ||
+      performance.now() < coolUntil
+    ) return;
+
+    analyser.getFloatTimeDomainData(samples);
+
+    let sum = 0;
+
+    for (let i = 0; i < samples.length; i++) {
+      sum += samples[i] * samples[i];
+    }
+
+    const rms = Math.sqrt(sum / samples.length);
+    const threshold = Math.max(0.016, noise * 3.0);
+    const now = performance.now();
+
+    if (phase === 'listening') {
+      if (rms < threshold) {
+        noise = 0.98 * noise + 0.02 * rms;
+      }
+
+      hits = rms > threshold ? hits + 1 : 0;
+
+      if (hits >= 2) {
+        hits = 0;
+        try {
+          beginRecording();
+        } catch(e) {
+          note('Recording error: ' + e.message);
+        }
+      }
+
+    } else {
+      if (rms > threshold * 0.75) {
+        lastLoud = now;
+      }
+
+      // Automatically finish after roughly 1 second of silence.
+      // Maximum question length: 17 seconds.
+      if (
+        (now - lastLoud > 1050 && now - speechAt > 650) ||
+        now - speechAt > 17000
+      ) {
+        phase = 'sending';
+        note('End of question detected; sending...');
+        recorder.stop();
+      }
+    }
+  }
+
+  function makeWav(buffer) {
+    const a = buffer.getChannelData(0);
+    const b = new ArrayBuffer(44 + a.length * 2);
+    const d = new DataView(b);
+
+    function str(at, s) {
+      for (let i = 0; i < s.length; i++) {
+        d.setUint8(at + i, s.charCodeAt(i));
+      }
+    }
+
+    str(0, 'RIFF');
+    d.setUint32(4, 36 + a.length * 2, true);
+    str(8, 'WAVE');
+    str(12, 'fmt ');
+
+    d.setUint32(16, 16, true);
+    d.setUint16(20, 1, true);
+    d.setUint16(22, 1, true);
+
+    d.setUint32(24, 16000, true);
+    d.setUint32(28, 32000, true);
+    d.setUint16(32, 2, true);
+    d.setUint16(34, 16, true);
+
+    str(36, 'data');
+    d.setUint32(40, a.length * 2, true);
+
+    for (let i = 0; i < a.length; i++) {
+      const x = Math.max(-1, Math.min(1, a[i]));
+      d.setInt16(
+        44 + 2 * i,
+        x < 0 ? x * 32768 : x * 32767,
+        true
+      );
+    }
+
+    return new Blob([b], {type: 'audio/wav'});
+  }
+
+  async function sendVoice() {
+    const payload = new Blob(chunks, {
+      type: recorder.mimeType
+    });
+
+    chunks = [];
+
+    const decoded = await micCtx.decodeAudioData(
+      await payload.arrayBuffer()
+    );
+
+    if (decoded.duration < 0.45) {
+      phase = 'listening';
+      note('Listening...');
+      return;
+    }
+
+    // Convert microphone recording to 16 kHz mono WAV.
+    const off = new OfflineAudioContext(
+      1,
+      Math.ceil(decoded.duration * 16000),
+      16000
+    );
+
+    const node = off.createBufferSource();
+    node.buffer = decoded;
+    node.connect(off.destination);
+    node.start();
+
+    const wav = makeWav(await off.startRendering());
+
+    const b64 = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+
+      r.onload = () => resolve(
+        String(r.result).split(',')[1]
+      );
+
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(wav);
+    });
+
+    if (!on) return;
+
+    note('Whisper is processing your speech...');
+
+    const response = await fetch('/api/voice', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        wav_b64: b64,
+        lang: lang.value
+      })
+    });
+
+    const result = await response.json();
+
+    if (!response.ok || !result.ok) {
+      throw Error(
+        result.error || 'HTTP ' + response.status
+      );
+    }
+
+    if (!on) return;
+
+    phase = 'waiting';
+    sentAt = performance.now();
+    sawSpeaking = false;
+    sawThinking = false;
+
+    note('Waiting for avatar reply...');
+  }
+
+  // Resume listening after the avatar finishes speaking.
+  async function poll() {
+    if (!on || checking) return;
+
+    checking = true;
+
+    try {
+      const response = await fetch('/api/state', {
+        cache: 'no-store'
+      });
+
+      if (!response.ok) return;
+
+      const state = String(
+        (await response.json()).state || ''
+      ).toUpperCase();
+
+      if (!on) return;
+
+      if (phase === 'waiting') {
+        if (state === 'SPEAKING') {
+          sawSpeaking = true;
+          note('Avatar is speaking...');
+        }
+
+        if (state === 'THINKING') {
+          sawThinking = true;
+        }
+
+        if (
+          state === 'LISTENING' &&
+          (sawSpeaking || sawThinking) &&
+          !window.avatarFullReplyBusy &&
+          performance.now() - sentAt > 1200
+        ) {
+          phase = 'listening';
+          coolUntil = performance.now() + 900;
+          note('Listening for your next question...');
+        }
+
+        if (
+          performance.now() - sentAt > 60000 &&
+          state !== 'SPEAKING'
+        ) {
+          note('Reply delayed; inspect avatar terminal');
+        }
+
+      } else if (
+        phase === 'listening' &&
+        state &&
+        state !== 'LISTENING'
+      ) {
+        phase = 'paused';
+        note('Avatar busy; microphone paused');
+
+      } else if (
+        phase === 'paused' &&
+        state === 'LISTENING' && !window.avatarFullReplyBusy
+      ) {
+        phase = 'listening';
+        coolUntil = performance.now() + 900;
+        note('Listening... ask your question');
+      }
+
+    } catch(e) {
+      console.warn('[auto-voice] state:', e);
+    } finally {
+      checking = false;
+    }
+  }
+
+  async function stop() {
+    on = false;
+    phase = 'off';
+
+    clearInterval(t1);
+    clearInterval(t2);
+
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop();
+    }
+
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+    }
+
+    if (src) src.disconnect();
+    if (analyser) analyser.disconnect();
+    if (zero) zero.disconnect();
+
+    if (micCtx) {
+      await micCtx.close().catch(() => {});
+    }
+
+    stream = micCtx = src = analyser = zero = recorder = null;
+    chunks = [];
+
+    btn.textContent = 'Start conversation';
+    note('Microphone off');
+  }
+
+  async function start() {
+    const ov = document.getElementById('ov');
+
+    // Start the original video player if necessary.
+    if (ov && getComputedStyle(ov).display !== 'none') {
+      document.getElementById('startBtn').click();
+    }
+
+    if (
+      !navigator.mediaDevices?.getUserMedia ||
+      !window.MediaRecorder
+    ) {
+      throw Error('Use Chrome/Edge over HTTPS');
+    }
+
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
+
+    micCtx = new AudioContext();
+    await micCtx.resume();
+
+    src = micCtx.createMediaStreamSource(stream);
+    analyser = micCtx.createAnalyser();
+    analyser.fftSize = 2048;
+
+    zero = micCtx.createGain();
+    zero.gain.value = 0;
+
+    src.connect(analyser);
+    analyser.connect(zero);
+    zero.connect(micCtx.destination);
+
+    on = true;
+    phase = 'listening';
+    noise = 0.003;
+    coolUntil = performance.now() + 500;
+
+    btn.textContent = 'Stop conversation';
+    note('Listening... ask your question');
+
+    // Lightweight microphone monitoring; separate from video rendering.
+    t1 = setInterval(meterTick, 70);
+    t2 = setInterval(poll, 900);
+
+    poll();
+  }
+
+  btn.onclick = async () => {
+    btn.disabled = true;
+
+    try {
+      if (on) {
+        await stop();
+      } else {
+        await start();
+      }
+    } catch(e) {
+      console.error(e);
+      await stop();
+      note('Error: ' + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  window.addEventListener('pagehide', () => {
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+    }
+  });
+})();
+</script>
+
+
+<!-- DEMO_FULL_REPLY_V1 -->
+<div id="fullReplyNotice" aria-live="polite" style="
+position:fixed;bottom:14px;left:14px;z-index:9999;
+background:#17263d;color:white;padding:10px 14px;
+border-radius:9px;font:14px Arial;display:none;
+box-shadow:0 3px 14px #0007"></div>
+
+<script>
+(() => {
+  'use strict';
+
+  const notice = document.getElementById('fullReplyNotice');
+  const liveOnFrame = onFrame;
+
+  let collecting = false;
+  let playing = false;
+  let packets = [];
+  let quietFrames = 0;
+  let collectingAt = 0;
+  let decodeTimer = null;
+  let generation = 0;
+
+  window.avatarFullReplyBusy = false;
+
+  function status(text) {
+    notice.textContent = text;
+    notice.style.display = text ? 'block' : 'none';
+    if (text) console.log('[complete-reply]', text);
+  }
+
+  function clearFrames() {
+    while (frames.length) {
+      const f = frames.shift();
+      if (f && f.b) {
+        try { f.b.close(); } catch (_) {}
+      }
+    }
+  }
+
+  function abortCollection(message) {
+    collecting = false;
+    playing = false;
+    packets = [];
+    generation++;
+
+    if (decodeTimer !== null) {
+      clearInterval(decodeTimer);
+      decodeTimer = null;
+    }
+
+    window.avatarFullReplyBusy = false;
+    t0 = null;
+    status(message);
+  }
+
+  async function playCompleteReply(reply) {
+    collecting = false;
+    playing = true;
+
+    status('Full answer received. Preparing playback...');
+
+    const token = ++generation;
+
+    try {
+      if (!ctx || !reply.length) {
+        throw Error('Audio player unavailable');
+      }
+
+      if (ctx.state === 'suspended') {
+        await ctx.resume();
+      }
+
+      const first = reply[0].n;
+      const last = reply[reply.length - 1].n;
+      const count = last - first + 1;
+
+      if (count < 1 || count > 1500) {
+        throw Error('Unexpected response length');
+      }
+
+      const samplesPerFrame = SR / FPS;
+
+      // Assemble one synchronized audio track for the answer.
+      const audio = ctx.createBuffer(
+        1,
+        count * samplesPerFrame,
+        SR
+      );
+
+      const waveform = audio.getChannelData(0);
+
+      for (const packet of reply) {
+        const offset = (packet.n - first) * samplesPerFrame;
+
+        if (offset < 0 || offset >= waveform.length) continue;
+
+        const length = Math.min(
+          packet.pcm.length,
+          waveform.length - offset
+        );
+
+        for (let i = 0; i < length; i++) {
+          waveform[offset + i] = packet.pcm[i] / 32768;
+        }
+      }
+
+      // Decode initial video frames before beginning playback.
+      const warm = Math.min(35, reply.length);
+
+      const initial = await Promise.all(
+        reply.slice(0, warm).map(p => createImageBitmap(p.jpg))
+      );
+
+      if (token !== generation || !playing) {
+        initial.forEach(b => b.close());
+        return;
+      }
+
+      clearFrames();
+
+      const playAt = ctx.currentTime + 0.4;
+
+      for (let i = 0; i < warm; i++) {
+        frames.push({
+          when: playAt + (reply[i].n - first) / FPS,
+          b: initial[i],
+          meta: reply[i].meta
+        });
+      }
+
+      // Decode later frames in advance without holding every
+      // decoded bitmap in browser memory simultaneously.
+      let cursor = warm;
+      let inFlight = 0;
+
+      decodeTimer = setInterval(() => {
+        if (!playing || token !== generation) {
+          clearInterval(decodeTimer);
+          decodeTimer = null;
+          return;
+        }
+
+        while (
+          cursor < reply.length &&
+          inFlight < 8 &&
+          playAt + (reply[cursor].n-first)/FPS
+            - ctx.currentTime < 2.2
+        ) {
+          const packet = reply[cursor++];
+          inFlight++;
+
+          createImageBitmap(packet.jpg)
+            .then(bitmap => {
+              if (!playing || token !== generation) {
+                bitmap.close();
+                return;
+              }
+
+              frames.push({
+                when: playAt + (packet.n-first)/FPS,
+                b: bitmap,
+                meta: packet.meta
+              });
+
+              frames.sort((a,b) => a.when-b.when);
+            })
+            .catch(err => {
+              console.warn('[complete-reply] JPEG decode:', err);
+            })
+            .finally(() => {
+              inFlight--;
+            });
+        }
+
+        if (cursor >= reply.length && inFlight === 0) {
+          clearInterval(decodeTimer);
+          decodeTimer = null;
+        }
+      }, 40);
+
+      const source = ctx.createBufferSource();
+
+      source.buffer = audio;
+      source.connect(ctx.destination);
+
+      source.onended = () => {
+        if (token !== generation) return;
+
+        source.disconnect();
+        playing = false;
+        window.avatarFullReplyBusy = false;
+        t0 = null;
+
+        status('');
+      };
+
+      source.start(playAt);
+
+      status('Playing complete answer...');
+
+    } catch (err) {
+      console.error('[complete-reply]', err);
+
+      abortCollection(
+        'Playback failed. Live view restored; check browser console.'
+      );
+    }
+  }
+
+  // Receive the same stream as before, but collect speech first.
+  onFrame = function(n, pcm, meta, jpg) {
+    if (!ctx) return;
+
+    // Backend continues running while saved reply is playing.
+    if (playing) return;
+
+    const mode = String(meta.state || '').toUpperCase();
+
+    const speaking =
+      mode === 'SPEAKING' ||
+      meta.utt != null;
+
+    if (!collecting && speaking) {
+      collecting = true;
+      collectingAt = performance.now();
+      quietFrames = 0;
+      packets = [];
+
+      window.avatarFullReplyBusy = true;
+
+      clearFrames();
+
+      status('Receiving complete avatar answer...');
+    }
+
+    if (!collecting) {
+      // Keep the original idle video behavior.
+      liveOnFrame(n, pcm, meta, jpg);
+      return;
+    }
+
+    recv++;
+
+    packets.push({
+      n,
+      pcm,
+      meta,
+      jpg
+    });
+
+    // The backend returns to LISTENING after speech finishes.
+    // Collect another eight idle frames before playing.
+    if (mode === 'LISTENING' && meta.utt == null) {
+      quietFrames++;
+    } else {
+      quietFrames = 0;
+    }
+
+    if (packets.length % 50 === 0) {
+      status(`Receiving answer... ${packets.length} frames`);
+    }
+
+    // Avoid unlimited browser memory usage.
+    if (packets.length >= 1500) {
+      abortCollection(
+        'Answer exceeds demo buffer limit; live view restored.'
+      );
+      return;
+    }
+
+    if (quietFrames >= 8) {
+      const completed = packets;
+      packets = [];
+
+      playCompleteReply(completed);
+    }
+  };
+
+  // Fail safely if video generation gets stuck.
+  setInterval(() => {
+    if (
+      collecting &&
+      performance.now() - collectingAt > 180000
+    ) {
+      abortCollection(
+        'Response stream stalled; live view restored.'
+      );
+    }
+  }, 3000);
+
+})();
+</script>
+
+</body></html>
