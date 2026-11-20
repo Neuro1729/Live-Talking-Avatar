@@ -23,8 +23,6 @@ The following videos provide a **qualitative** comparison of the base MuseTalk m
 
 ![Fine-tuning visual result](assets/finetuning_result.png)
 
-> Add `assets/finetuning_result.png` to this repository to display the comparison image above. The videos are visual demonstrations; they are not, by themselves, a controlled quantitative benchmark.
-
 ## How the system works
 
 ```mermaid
